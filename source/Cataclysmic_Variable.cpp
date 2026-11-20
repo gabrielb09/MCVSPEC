@@ -1,44 +1,38 @@
 #include "Cataclysmic_Variable.hh"
 #include "constants.hh"
 #include "integration.hh"
-#include "mass_radius.hh"
-#include "gaunt.hh"
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <iostream>
 #include <vector>
 
-double Luminosity_to_Accretion_Rate(double luminosity, White_Dwarf wd){
-    double accretion_rate = luminosity/(grav_const*wd.mass/wd.radius);
-    return accretion_rate;
-}
 
-double Mass_to_Radius(double mass){
-    int left_ind = 0;
-    int i = mass_radius_length/2;
-    int right_ind = mass_radius_length-1;
-    while(right_ind-left_ind > 1){
-        i = left_ind + (right_ind-left_ind)/2;
-        if(mass>white_dwarf_mass[i]){
-            left_ind = i;
-        }
-        else{
-            right_ind = i;
-        }
-    }
-    double delta_r = white_dwarf_radius[right_ind]-white_dwarf_radius[left_ind];
-    double delta_m = white_dwarf_mass[right_ind]-white_dwarf_mass[left_ind];
-    double radius = white_dwarf_radius[left_ind] + (delta_r/delta_m)*(mass-white_dwarf_mass[left_ind]);
-    return radius;
-}
+namespace mcvspec {
 
 Cataclysmic_Variable::Cataclysmic_Variable(White_Dwarf wd, Accretion_Column col, Tolerance tol):
-    white_dwarf(wd), accretion_column(col), error_control(tol), geometry(accretion_column.sin_mag_colat*accretion_column.sin_mag_colat),
-    length_conv(white_dwarf.radius), vel_conv(sqrt(2*grav_const*white_dwarf.mass/white_dwarf.radius)), accretion_rate_conv(geometry.a_0*col.accretion_rate),
-    time_conv(length_conv/vel_conv), mass_conv(accretion_rate_conv*length_conv*length_conv*time_conv), volume_conv(length_conv*length_conv*length_conv),
-    energy_conv(mass_conv*vel_conv*vel_conv), density_conv(mass_conv/volume_conv), pressure_conv(energy_conv/volume_conv),
-    integrator(Diff_EQ{*this},error_control.absolute_error,error_control.relative_error)
-{}
+    white_dwarf(wd),
+    accretion_column(col),
+    error_control(tol),
+    geometry(accretion_column.sin_mag_colat*accretion_column.sin_mag_colat),
+    length_conv(white_dwarf.radius),
+    vel_conv(sqrt(2*grav_const*white_dwarf.mass/white_dwarf.radius)),
+    accretion_rate_conv(geometry.a_0*col.accretion_rate),
+    time_conv(length_conv/vel_conv),
+    mass_conv(accretion_rate_conv*length_conv*length_conv*time_conv),
+    volume_conv(length_conv*length_conv*length_conv),
+    energy_conv(mass_conv*vel_conv*vel_conv),
+    density_conv(mass_conv/volume_conv),
+    pressure_conv(energy_conv/volume_conv),
+    integrator(
+        Accretion_Eq(
+            Accretion_Coeffs(1,1,1,1,1,1,density_conv,pressure_conv),
+            geometry
+        ),
+        std::array<double, 4>{},
+        integration::Options{.rtol=error_control.relative_error, .atol=error_control.absolute_error}
+    )
+{Set_Abundances();}
 
 void Cataclysmic_Variable::Set_Cooling_Constants(){ // "constant" insofar as these values depend only on the input properties not on any derived properties
     // constants related to column composition
@@ -65,9 +59,22 @@ void Cataclysmic_Variable::Set_Cooling_Constants(){ // "constant" insofar as the
     cyclotron_const *= pressure_conv*pressure_conv*pow(vel_conv,3.85);
     exchange_const = exchange_coeff*avg_charge_sqr_over_mass*sqrt(j_e*j_e*j_e*j_e*j_e);
     exchange_const *= length_conv*length_conv*time_conv*time_conv*time_conv*sqrt(time_conv/energy_conv)/energy_conv;
+
+    Accretion_Coeffs coeffs{
+        .cyclotron_const=cyclotron_const,
+        .bremss_const=bremss_const,
+        .exchange_const=exchange_const,
+        .coulomb_log_coeff=coulomb_log_coeff,
+        .avg_atomic_charge=avg_atomic_charge,
+        .mass_to_number_density=mass_to_number_density,
+        .density_conv=density_conv,
+        .pressure_conv=pressure_conv,
+    };
+
+    integrator.set_system(Accretion_Eq(coeffs, geometry));
 }
 
-void Cataclysmic_Variable::Compute_Shock_Bound(double w_s, State<n_dim>& bound, double& s_s) const{
+void Cataclysmic_Variable::Compute_Shock_Bound(double w_s, std::array<double, 4>& bound, double& s_s) const{
     double r_s, proj_r_w, convergance, scale_factors[3];
     geometry.update_coordinates(w_s, r_s, proj_r_w, convergance, scale_factors);
     double mdot = 1./(scale_factors[1]*scale_factors[2]);
@@ -79,74 +86,35 @@ void Cataclysmic_Variable::Compute_Shock_Bound(double w_s, State<n_dim>& bound, 
     s_s = mdot*0.75*vff*pow(0.25*vff/mdot, 5./3.);
 }
 
-void Cataclysmic_Variable::Flow_Equation(double entropy,const State<n_dim>& state, State<n_dim>& derivs) const{
-    const double& s = entropy;
-    const double& w = state[0];
-    const double& x = state[1];
-    const double& v = state[2];
-    const double& pe = state[3];
-
-    double r, proj_r_w, convergance, scale_factors[3];
-    geometry.update_coordinates(w, r, proj_r_w, convergance, scale_factors);
-
-    const double& h = scale_factors[0];
-    const double area = scale_factors[1]*scale_factors[2];
-    const double mdot = 1./area;
-    const double p = mdot*(x-v);
-
-
-    const double ne_cgs = mass_to_number_density*density_conv*mdot/v;
-    const double kT_cgs = pressure_conv*pe/ne_cgs;
-    const double gff = gaunt::gaunt_factor(kT_cgs);
-    const double coulomb_log = 0.5*log(coulomb_log_coeff*kT_cgs*kT_cgs/ne_cgs);
-
-    const double cyc = (cyclotron_const/gff)*pe*pe*v*v*v*h*pow(v*v/h, 0.425);
-    const double rad = bremss_const*gff*sqrt(pe/(h*h*h*v*v*v))*(1+cyc);
-    const double exch = (exchange_const*coulomb_log/(bremss_const*gff))*(avg_atomic_charge*(p-pe)/pe - 1.0)/(pe*v*h*(1+cyc)); // ratio of exchange to radiation
-    const double grav = 0.5*proj_r_w/(r*r)/rad;
-    const double conv = v*convergance/(h*rad);
-
-    double dw_ds = -1.5*p*v/(s*h*rad);
-    double dx_ds = -1.5*(p/s)*(p*conv/mdot - grav);
-    double dv_ds = 1.5*(p*v/s)*(2.0/mdot + 5*p*conv/mdot -3*grav)/(5*x - 8*v);
-    double dp_ds = (p/s)*(1.0 - exch + 5*pe*(1.5*grav - 1.0/mdot - v*conv)/(5*x - 8*v));
-
-    derivs[0] = dw_ds;
-    derivs[1] = dx_ds;
-    derivs[2] = dv_ds;
-    derivs[3] = dp_ds;
-}
-
 double Cataclysmic_Variable::Landing_Altitude(double w_s) const {
     // return signed distance from WD surface in w
     double s_s;
-    State<n_dim> y;
+    std::array<double, 4> y;
     Compute_Shock_Bound(w_s, y, s_s);
-    double s = s_s;
-    int status=0;
-    integrator.Initialize(s, 0, y);
-    while(s/s_s > 1e-2 && status==0){
-         status=integrator.Step(s, y);
+    integration::Status status = integration::Status::success;
+    integrator.reset(s_s, 0, y);
+    while(integrator.coordinate()/s_s > 1e-2 && status==integration::Status::success){
+         status=integrator.step();
     }
-    if(status!=0){
-        return -2;
-    }
+    if(status != integration::Status::success){ return -1; }
+
     double error = 1;
-    State<n_dim> slope{};
-    Flow_Equation(s,  y, slope);
-    double s_prev = s;
+    std::array<double, 4> slope{};
+    integrator.dydt(slope);
+
+    double s_prev = integrator.coordinate();
     double dw_prev = slope[0];
 
     while(error > error_control.absolute_error){
-        integrator.Step(s, y);
-        Flow_Equation(s,  y, slope);
-        error = 0.5*std::abs((slope[0]-dw_prev)/(s-s_prev))*s*s; //difference between linear and quadratic extrapolation on w
-        s_prev = s;
+        integrator.step();
+        integrator.dydt(slope);
+        error = 0.5*std::abs((slope[0]-dw_prev)/(integrator.coordinate()-s_prev))*integrator.coordinate()*integrator.coordinate(); //difference between linear and quadratic extrapolation on w
+        s_prev = integrator.coordinate();
         dw_prev = slope[0];
     }
-    integrator.Step(s, y);
-    Flow_Equation(s,  y, slope);
-    double landing = y[0] - slope[0]*s;
+    integrator.step();
+    integrator.dydt(slope);
+    double landing = integrator.state()[0] - slope[0]*integrator.coordinate();
     return landing - geometry.w_0;
 }
 
@@ -244,7 +212,7 @@ void Cataclysmic_Variable::Find_Shock_Position(){
         }
         i++;
     }
-    State<n_dim> bound{};
+    std::array<double, 4> bound{};
     double s_s;
     Compute_Shock_Bound(0.5*(upper_bound+lower_bound), bound, s_s);
     shock_boundary = bound;
@@ -252,26 +220,26 @@ void Cataclysmic_Variable::Find_Shock_Position(){
 }
 
 template <typename func>
-void Cataclysmic_Variable::Build_Grid(func grid_func, const State<n_grid_vars>& grid_spacing, std::vector<State<n_dim>>& grid) const {
+void Cataclysmic_Variable::Build_Grid(func grid_func, const std::array<double,n_grid_vars>& grid_spacing, std::vector<std::array<double, 4>>& grid) const {
     if(!valid_solution){
         return;
     }
     constexpr int n_segments=16;
     // integration variables
     double t = shock_entropy;
-    State<n_dim> y = shock_boundary;
-    integrator.Initialize(t, 0, y);
+    std::array<double, 4> y = shock_boundary;
+    integrator.reset(t, 0, y);
 
     // grid variables
-    State<n_grid_vars> grid_vars{};
+    std::array<double,n_grid_vars> grid_vars{};
     grid_func(t,y,grid_vars);
     grid.reserve(size_t(std::abs(grid_vars[0]/grid_spacing[0]))+1);
     grid.push_back(y);
 
     // segment variables
     double t_left, t_right, t_cross;
-    State<n_dim> y_left, y_right;
-    State<n_grid_vars> grid_left, grid_right;
+    std::array<double, 4> y_left, y_right;
+    std::array<double,n_grid_vars> grid_left, grid_right;
     y_right = y;
     grid_right = grid_vars;
 
@@ -295,20 +263,23 @@ void Cataclysmic_Variable::Build_Grid(func grid_func, const State<n_grid_vars>& 
         return true;
     };
 
-    while(grid_vars[0] > grid_spacing[0] && t > error_control.absolute_error){
-        double t0 = t;
-        integrator.Dense_Step(t,y);
-        double dt = (t-t0)/double(n_segments);
+    while(grid_vars[0] > grid_spacing[0] && integrator.coordinate() > error_control.absolute_error){
+        double t0 = integrator.coordinate();
+        const auto status = integrator.step();
+        if (status != integration::Status::success) {
+            throw std::runtime_error("RK45 integration failed");
+        }
+        double dt = (integrator.coordinate()-t0)/double(n_segments);
         for(size_t seg=0; seg<n_segments; seg++){
             t_left = t0 + dt*seg;
             t_right = t0 + dt*(seg+1);
             y_left = y_right;
-            integrator.Interpolate(t_right, y_right);
+            integrator.interpolate(t_right, y_right);
             grid_left = grid_right;
             grid_func(t_right, y_right, grid_right);
             while(crossing_found(t_left, t_right)){
                 t_left = t_cross;
-                integrator.Interpolate(t_left, y_left);
+                integrator.interpolate(t_left, y_left);
                 grid_func(t_left, y_left, grid_left);
                 grid.push_back(y_left);
                 grid_vars = grid_left;
@@ -325,22 +296,22 @@ void Cataclysmic_Variable::Build_Column_Profile(){
     const double dkTi = dkTe/avg_atomic_charge;
     double r, proj, conv, scale_factors[3];
     geometry.update_coordinates(shock_boundary[0], r, proj, conv, scale_factors);
-    const State<n_grid_vars> grid_spacing = {dkTi, dkTe, error_control.altitude_grid_spacing*(r-1)};
+    const std::array<double,n_grid_vars> grid_spacing = {dkTi, dkTe, error_control.altitude_grid_spacing*(r-1)};
 
-    auto kT_e = [](const State<n_dim>& y, double scale_factors[3]){
+    auto kT_e = [](const std::array<double,4>& y, double scale_factors[3]){
         return y[2]*y[3]*scale_factors[0]*scale_factors[2];
     };
-    auto kT_i = [](const State<n_dim>& y, double scale_factors[3]){
+    auto kT_i = [](const std::array<double,4>& y, double scale_factors[3]){
         return y[2]*(y[1]-y[2]-y[3]*scale_factors[0]*scale_factors[2]);
     };
-    auto grid_func = [this, kT_e, kT_i, &r, &proj, &conv, &scale_factors](const double& t, const State<n_dim>& y, State<n_grid_vars>& vars){
+    auto grid_func = [this, kT_e, kT_i, &r, &proj, &conv, &scale_factors](const double& t, const std::array<double,n_dim>& y, std::array<double,n_grid_vars>& vars){
         geometry.update_coordinates(y[0], r, proj, conv, scale_factors);
         vars[0] = kT_i(y, scale_factors);
         vars[1] = kT_e(y, scale_factors);
         vars[2] = r;
     };
 
-    std::vector<State<n_dim>> grid;
+    std::vector<std::array<double,n_dim>> grid;
     Build_Grid(grid_func, grid_spacing, grid);
 
     int n_points = grid.size();
@@ -394,4 +365,6 @@ void Cataclysmic_Variable::Print_Properties() const{
     cout << " shock height:       " << altitude[0] << " cm" << endl;
     cout << " shock temperature:  " << ion_temperature[0] << " keV" << endl;
     cout << " density:            " <<  electron_density[0] << " --> " << electron_density[electron_density.size()-1] <<  " e-/cm3" << endl;
+}
+
 }

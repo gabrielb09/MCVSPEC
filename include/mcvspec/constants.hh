@@ -3,6 +3,8 @@
 #include <cmath>
 #include <array>
 
+namespace mcvspec {
+
 // physical constants
 constexpr double pi = 3.14159265358979323846264338327950;
 constexpr double c = 2.99792458e10; // cm/s
@@ -31,3 +33,5 @@ constexpr double erg_to_kev = 6.241509074461e8;
 constexpr double amu_to_g =  1.6605390689252e-24; // mass of amu in grams
 constexpr double pc_to_cm = 3.0856775814913673e18;
 constexpr double ryd_to_erg = 2.1798723611035845e-11; // rydberg energy unit in ergs
+
+}

@@ -1,7 +1,7 @@
 #pragma once
 #include "constants.hh"
 
-namespace gaunt{
+namespace mcvspec { namespace gaunt{
     // coefficients for exact non-relativistic gaunt factor
     const double a_high[5] = {1.43251926625281e+00, 3.50626935257777e-01, 4.36183448595035e-01, 6.03536387105599e-02, 3.66626405363100e-02};
     const double b_high[5] = {1.00000000000000e+00, 2.92525161994346e-01, 4.05566949766954e-01, 5.62573012783879e-02, 3.33019373823972e-02};
@@ -32,7 +32,7 @@ namespace gaunt{
         }
         return p/q;
     }
-}
+}}
 
 /*
     Copyright (c) 2014, Peter A.M. van Hoof.
