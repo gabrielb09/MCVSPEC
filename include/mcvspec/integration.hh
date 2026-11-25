@@ -1,11 +1,42 @@
 #pragma once
 
+#include <concepts>
 #include <cstddef>
+#include <ranges>
 
-#include "ode.hh"
 
+namespace mcvspec {
 
-namespace mcvspec { namespace integration {
+template<typename T>
+concept NumericalContainer =
+    std::ranges::random_access_range<T> &&
+    std::ranges::random_access_range<const T> &&
+    std::ranges::sized_range<T> &&
+    std::same_as<std::ranges::range_value_t<T>, double> &&
+    std::default_initializable<T> &&
+    std::copyable<T> &&
+    !std::ranges::view<T> &&
+    requires(T& arr, const T& const_arr, std::size_t i){
+        { arr.size() } -> std::convertible_to<std::size_t>;
+        { const_arr.size() } -> std::convertible_to<std::size_t>;
+        { arr[i] } -> std::same_as<double&>;
+        { const_arr[i] } -> std::same_as<const double&>;
+    };
+
+template<typename T>
+concept DifferentialEquation =
+    requires { typename T::State; } &&
+    NumericalContainer<typename T::State> &&
+    requires(
+        const T& system,
+        double t,
+        const typename T::State& y,
+        typename T::State& dydx
+    ) {
+        { system(t, y, dydx) } -> std::same_as<void>;
+    };
+
+namespace integration {
 
 struct Options{
     double rtol = 1e-8;

@@ -9,7 +9,6 @@
 
 #include "array_operators.hh"
 #include "integration.hh"
-#include "ode.hh"
 
 namespace mcvspec { namespace integration { namespace rk45 {
 

@@ -18,6 +18,7 @@ target_compile_features(mcvspec PUBLIC cxx_std_20)
 target_include_directories(mcvspec PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include/mcvspec
   ${CMAKE_CURRENT_SOURCE_DIR}/include/mcvspec/integrators
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/mcvspec/root_finders
   ${CMAKE_CURRENT_SOURCE_DIR}/resources
 )
 
